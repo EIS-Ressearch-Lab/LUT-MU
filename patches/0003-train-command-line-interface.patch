@@ -1,0 +1,923 @@
+From e39ec429cabf883523b47187dd9ac7019581f7ab Mon Sep 17 00:00:00 2001
+From: PeiGiZhu <peigizhu@outlook.com>
+Date: Tue, 9 Jun 2026 14:16:10 +0000
+Subject: [PATCH 3/4] train command line interface
+
+---
+ .../configs/quant_resnet18_num_C_8_K_16.json  |   9 +
+ train/configs/quant_resnet50_custom_C_K.json  |  15 ++
+ train/retraining.py                           | 248 ++++++++++++++----
+ train/training/train.py                       | 241 ++++++++++++++++-
+ train/training/train_quantization.py          |   2 +-
+ train/utils/analysis_helper.py                |  56 +++-
+ 6 files changed, 507 insertions(+), 64 deletions(-)
+ create mode 100644 train/configs/quant_resnet18_num_C_8_K_16.json
+ create mode 100644 train/configs/quant_resnet50_custom_C_K.json
+
+diff --git a/train/configs/quant_resnet18_num_C_8_K_16.json b/train/configs/quant_resnet18_num_C_8_K_16.json
+new file mode 100644
+index 0000000..4f7c291
+--- /dev/null
++++ b/train/configs/quant_resnet18_num_C_8_K_16.json
+@@ -0,0 +1,9 @@
++{
++    "length_per_codebook": [8, 8, 
++                            8, 8, 
++                            8, 8, 8],
++                            
++    "prototype_per_codebook": [16, 16,  
++                               16, 16,  
++                               16, 16, 16]
++}
+\ No newline at end of file
+diff --git a/train/configs/quant_resnet50_custom_C_K.json b/train/configs/quant_resnet50_custom_C_K.json
+new file mode 100644
+index 0000000..3a479c7
+--- /dev/null
++++ b/train/configs/quant_resnet50_custom_C_K.json
+@@ -0,0 +1,15 @@
++{
++    "length_per_codebook": [8, 8, 8, 8, 
++                            16, 8, 8, 
++                            16, 8, 8,
++                            16, 16, 16, 16,
++                            32, 16, 16
++                        ],
++                            
++    "prototype_per_codebook": [16, 16, 16, 16, 
++                               16, 16, 16, 
++                               16, 16, 16,
++                               16, 16, 16, 16,
++                               16, 16, 16
++                            ]
++}
+\ No newline at end of file
+diff --git a/train/retraining.py b/train/retraining.py
+index 8d5a0ff..33c77bf 100644
+--- a/train/retraining.py
++++ b/train/retraining.py
+@@ -18,7 +18,7 @@ from training import utils_train
+ from training.utils_train import save_on_master, set_weight_decay  # type: ignore[attr-defined]
+ from training.train import load_data, main  # type: ignore[attr-defined]
+ from utils.analysis_helper import get_layers, sys_info
+-from models.resnet import resnet18
++from models.resnet import resnet18, resnet34, resnet50
+ from models.resnet9 import ResNet9
+ from models.resnet20 import resnet20
+ from models.tiny.resnet8 import Resnet8v1EEMBC
+@@ -26,6 +26,10 @@ from halutmatmul.halutmatmul import HalutModuleConfig
+ from halutmatmul.model import HalutHelper, get_module_by_name
+ from halutmatmul.modules import HalutConv2d, HalutLinear
+ 
++from models.qatfc import quant_fc
++from models.qatresnet9 import QuantResNet9
++from models.qatresnet import quant_resnet18, quant_resnet34, quant_resnet50
++from halutmatmul.modules import LUTMUConv2d, LUTMULinear
+ 
+ def load_model(
+     checkpoint_path: str,
+@@ -75,6 +79,49 @@ def load_model(
+             model = ResNet9(3, num_classes)  # type: ignore
+         elif args.model == "resnet8":
+             model = Resnet8v1EEMBC()  # type: ignore
++        elif args.model == "quant_resnet9":
++            model = QuantResNet9(3, num_classes,
++                                weight_bit_width = args.bitwidth,
++                                act_bit_width = args.bitwidth,)
++    elif args.mnist:
++        model = quant_fc(weight_bit_width = args.bitwidth,
++                        act_bit_width = args.bitwidth,
++                        in_bit_width = args.bitwidth,
++                        out_features = [256, 256, 256],
++                        num_classes = num_classes)
++        
++    elif args.imagenet or args.imagenet_small or args.imagenet_tiny:
++        if args.model == 'quant_resnet18':
++            model = quant_resnet18(weight_bit_width = args.bitwidth, 
++                                   act_bit_width = args.bitwidth,  
++                                   num_classes = num_classes, 
++                                   is_imagenet = True)
++            
++        elif args.model == 'quant_resnet34':
++            model = quant_resnet34(weight_bit_width = args.bitwidth, 
++                                   act_bit_width = args.bitwidth, 
++                                   num_classes = num_classes, 
++                                   is_imagenet = True)
++            
++        elif args.model == 'quant_resnet50':
++            model = quant_resnet50(weight_bit_width = args.bitwidth, 
++                                   act_bit_width = args.bitwidth, 
++                                   num_classes = num_classes, 
++                                   is_imagenet = True)
++            
++        elif args.model == 'resnet18':
++            model = resnet18(
++                **{"is_cifar": False, "num_classes": num_classes}
++            )
++        elif args.model == 'resnet34':
++            model = resnet34(
++                **{"is_cifar": False, "num_classes": num_classes}
++            )
++        elif args.model == 'resnet50':
++            model = resnet50(
++                **{"is_cifar": False, "num_classes": num_classes}
++            )
++        
+     else:
+         # model = timm.create_model(args.model, pretrained=True, num_classes=num_classes)
+         model = torchvision.models.get_model(
+@@ -136,15 +183,15 @@ def run_retraining(
+         halut_data_path += "/" + model_name
+     Path(halut_data_path).mkdir(parents=True, exist_ok=True)
+ 
+-    model_copy = deepcopy(model)
+-    model.to(args.gpu)
+-
+     torch.cuda.set_device(args.gpu)
+     sys_info()
+     device = torch.device(
+         "cuda:" + str(args.gpu) if torch.cuda.is_available() else "cpu"
+     )
+ 
++    model_copy = deepcopy(model)
++    model.to(device)
++    
+     if not hasattr(args, "distributed"):
+         args.distributed = False
+ 
+@@ -161,6 +208,7 @@ def run_retraining(
+         report_error=False,
+         distributed=args.distributed,
+         device_id=args.gpu,
++        # use_lutmu = args.lutmu, # Patch added a trigger for activating lutmu kn2col slicing
+     )
+     halut_model.print_available_module()
+     layers = get_layers(model_name)  # type: ignore[arg-type]
+@@ -170,19 +218,38 @@ def run_retraining(
+         halut_modules = {}
+     else:
+         next_layer_idx = len(halut_modules.keys())
+-    K = 16
++    
++    # Patch added to load kc_config if available
++    length_per_codebook: list[int] = []
++    prototype_per_codebook: list[int] = []
++    
++    if args.kc_config is not None:
++        
++        with open(args.kc_config, 'r') as f:
++            kc_config = json.load(f)
++        length_per_codebook = kc_config['length_per_codebook']
++        prototype_per_codebook = kc_config['prototype_per_codebook']
++        
++    else:
++        K = args.nprototype
++        C = args.codebook
++        
++        length_per_codebook = [C]*len(layers)
++        prototype_per_codebook = [K]*len(layers)
++        
+     use_prototype = False
+-
++    use_lutmu = args.lutmu
++    
+     max = len(layers)
+     max = next_layer_idx + 1
+     for i in range(next_layer_idx, max):
+         if not test_only and i < len(layers):
+             next_layer = layers[i]
+-            c_base = 16
+-            loop_order = "im2col"  # kn2col only tested experimentally
+-            c_ = c_base
++            # loop_order = "im2col"  # kn2col only tested experimentally
++            loop_order = "kn2col" if args.kn2col else "im2col"
+             module_ref = get_module_by_name(halut_model.model, next_layer)
+-            if isinstance(module_ref, HalutConv2d):
++            print("module_ref", module_ref)
++            if isinstance(module_ref, (HalutConv2d, LUTMUConv2d)):
+                 inner_dim_im2col = (
+                     module_ref.in_channels
+                     * module_ref.kernel_size[0]
+@@ -193,33 +260,58 @@ def run_retraining(
+                     c_ = inner_dim_im2col // 9  # 9 = 3x3
+                     if module_ref.kernel_size[0] * module_ref.kernel_size[1] == 1:
+                         c_ = inner_dim_im2col // 4
++                elif loop_order == "kn2col":
++                    
++                    if use_lutmu:
++                        c_ = inner_dim_kn2col // length_per_codebook[i]  # lutmu specific
++                    else:
++                        c_ = (
++                            inner_dim_kn2col // 8
++                        )  # little lower than 9 but safer to work now
+                 else:
+-                    c_ = (
+-                        inner_dim_kn2col // 8
+-                    )  # little lower than 9 but safer to work now
++                    raise ValueError("Unknown loop order {}".format(loop_order))
++                
+                 if "downsample" in next_layer or "shortcut" in next_layer:
+-                    loop_order = "im2col"
+-                    c_ = inner_dim_im2col // 4
+-            print("module_ref", module_ref)
+-            if isinstance(module_ref, HalutLinear):
+-                c_ = 256 // 4
+-            modules = {next_layer: [c_, K, loop_order, use_prototype]} | halut_modules
++                    if loop_order == "im2col":
++                        c_ = inner_dim_im2col // 4
++                    elif loop_order == "kn2col":
++                        if use_lutmu:
++                            # Patch added for lutmu kn2col downsample handling
++                            c_ = inner_dim_kn2col // length_per_codebook[i]  # lutmu specific
++                        else:
++                            # original version converts downsample to im2col when loop_order is kn2col
++                            loop_order = "im2col"
++                            c_ = inner_dim_kn2col // 4
++                    else:
++                        raise ValueError("Unknown loop order {}".format(loop_order))
++                
++            
++            if isinstance(module_ref, (HalutLinear, LUTMULinear)):
++                c_ = module_ref.in_features//length_per_codebook[i]
++                
++            modules = {next_layer: [c_, prototype_per_codebook[i], loop_order, use_prototype, use_lutmu]} | halut_modules
++            
+         else:
+             modules = halut_modules
++    
+         for k, v in modules.items():
+             if len(v) > 3:
++                # modules[next_layer] with 5 items (Conv) will enter this branch
+                 halut_model.activate_halut_module(
+                     k,
+                     C=v[HalutModuleConfig.C],  # type: ignore
+                     K=v[HalutModuleConfig.K],  # type: ignore
+                     loop_order=v[HalutModuleConfig.LOOP_ORDER],  # type: ignore
+                     use_prototypes=v[HalutModuleConfig.USE_PROTOTYPES],  # type: ignore
++                    use_lutmu=v[HalutModuleConfig.USE_LUTMU],  # type: ignore
+                 )
+             else:
++                # previous halut_modules with 3 items (Linear) will enter this branch
+                 halut_model.activate_halut_module(
+                     k,
+                     C=v[HalutModuleConfig.C],  # type: ignore
+                     K=v[HalutModuleConfig.K],  # type: ignore
++                    use_prototypes=v[HalutModuleConfig.USE_PROTOTYPES],  # type: ignore
+                 )
+     if args.distributed:
+         dist.barrier()
+@@ -247,7 +339,7 @@ def run_retraining(
+             for name, p in module.named_parameters(recurse=False):
+                 if not p.requires_grad:
+                     continue
+-                if isinstance(module, (HalutConv2d, HalutLinear)):
++                if isinstance(module, (HalutConv2d, HalutLinear, LUTMUConv2d, LUTMULinear)):
+                     if name == "thresholds":
+                         params["thresholds"].append(p)
+                         continue
+@@ -354,13 +446,13 @@ def run_retraining(
+                 ),
+             )
+ 
+-    result_base_path = args.resultpath
+-    if model_name not in result_base_path.lower():
+-        result_base_path += "/" + model_name + "/"
++    result_base_path = os.path.join(args.resultpath, model_name, args.testname)
++        
+     Path(result_base_path).mkdir(parents=True, exist_ok=True)
++    
+     if not args.distributed or args.rank == 0:
+         with open(
+-            f"{args.resultpath}/retrained_{len(halut_model.halut_modules.keys())}"
++            f"{result_base_path}/retrained_{len(halut_model.halut_modules.keys())}"
+             f"{'_trained' if test_only else ''}.json",
+             "w",
+         ) as fp:
+@@ -373,16 +465,77 @@ def run_retraining(
+ 
+ 
+ if __name__ == "__main__":
+-    DEFAULT_FOLDER = "/scratch2/janniss/"
+-    MODEL_NAME_EXTENSION = "cifar10-halut-resnet9"
+-    TRAIN_EPOCHS = 25  # 25 layer-per-layer, 300 fine-tuning
+-    BATCH_SIZE = 128  # 128
+-    LR = 0.001  # 0.001/0.002 layer-per-payer, 0.0005 fine-tuning
++    DEFAULT_FOLDER = "."
++    # MODEL_NAME_EXTENSION = "cifar10-halut-resnet9"
++    # TRAIN_EPOCHS = 25  # 25 layer-per-layer, 300 fine-tuning
++    # BATCH_SIZE = 128  # 128
++    # LR = 0.001  # 0.001/0.002 layer-per-payer, 0.0005 fine-tuning
+     GRADIENT_ACCUMULATION_STEPS = 1
+     parser = argparse.ArgumentParser(description="Replace layer with halut")
+     parser.add_argument(
+         "cuda_id", metavar="N", type=int, help="id of cuda_card", default=0
+     )
++    parser.add_argument(
++        "-workdir",
++        type=str,
++        help="workdir",
++        default=f'{DEFAULT_FOLDER}',
++    )
++    parser.add_argument(
++        "-j",
++        "--workers",
++        default=4,
++        type=int,
++        metavar="N",
++        help="number of data loading workers (default: 16)",
++    )
++    parser.add_argument(
++        "-batch_size",
++        type=int,
++        default=128,
++    )
++    parser.add_argument(
++        "--epochs",
++        type=int,
++        default=25,
++    )
++    parser.add_argument(
++        "--lr",
++        type=float,
++        default=0.0001,
++        help="learning rate",
++    )
++    parser.add_argument(
++        "--kc_config",
++        type=str,
++        help="json file path for codebook and prototype configuration",
++        default=None,
++    )
++    parser.add_argument(
++        "--kn2col",
++        action="store_true",
++        help="use kn2col method",
++    )
++    
++    parser.add_argument(
++        "-nprototype",
++        default= 16,
++        type=int,
++    )
++    
++    parser.add_argument(
++        "-codebook",
++        default= 8,
++        type=int,
++    )
++    
++    parser.add_argument(
++        "--lutmu",
++        action="store_true",
++        help="use lutmu kn2col method",
++    )
++    
++    # MUST HAVE. Format: model name + version numbe
+     parser.add_argument(
+         "-testname",
+         type=str,
+@@ -393,13 +546,13 @@ if __name__ == "__main__":
+         "-halutdata",
+         type=str,
+         help="halut data path",
+-        default=DEFAULT_FOLDER + f"/halut/resnet9-{MODEL_NAME_EXTENSION}",
++        default=None,
+     )
+     parser.add_argument(
+         "-learned",
+         type=str,
+         help="halut learned path",
+-        default=DEFAULT_FOLDER + f"/halut/resnet9-{MODEL_NAME_EXTENSION}/learned",
++        default=None,
+     )
+     parser.add_argument("-C", type=int, help="C", default=64)
+     parser.add_argument("-modelname", type=str, help="model name", default="resnet18")
+@@ -407,17 +560,15 @@ if __name__ == "__main__":
+         "-resultpath",
+         type=str,
+         help="result_path",
+-        default=f"./results/data/resnet9-{MODEL_NAME_EXTENSION}/",
++        default=f"./results/data/",
+     )
++    # MUST HAVE. It is where to take original model trained parameter (pth in DEFAULT_FOLDER).
+     parser.add_argument(
+         "-checkpoint",
+         type=str,
+         help="check_point_path",
+         # WILL BE OVERWRITTEN!!!
+-        default=(
+-            f"/scratch2/janniss/model_checkpoints/{MODEL_NAME_EXTENSION}/retrained_checkpoint.pth"
+-            # f"/scratch2/janniss/model_checkpoints/cifar10/checkpoint.pth"
+-        ),
++        default=None
+     )
+     parser.add_argument(
+         "-single",
+@@ -437,16 +588,22 @@ if __name__ == "__main__":
+     args = parser.parse_args()
+ 
+     print(args)
+-
++    BATCH_SIZE = args.batch_size
++    TRAIN_EPOCHS = args.epochs
++    LR = args.lr
++    
+     if args.testname is not None:
+-        args.resultpath = f"./results/data/{args.testname}/"
+-        args.halutdata = DEFAULT_FOLDER + f"/halut/{args.testname}/"
+-        args.learned = DEFAULT_FOLDER + f"/halut/{args.testname}/learned/"
+-
+-    output_dir = os.path.dirname(args.checkpoint)
+-    if args.testname is not None:
+-        output_dir = DEFAULT_FOLDER + f"/halut/{args.testname}/checkpoints/"
++        args.halutdata = args.workdir + f"/halut/{args.testname}/"
++        args.learned = args.workdir + f"/halut/{args.testname}/learned/"
++        output_dir = args.workdir + f"/halut/{args.testname}/checkpoints/"
++    else:
++        raise ValueError("testname argument must be provided.")
++    
+     Path(output_dir).mkdir(parents=True, exist_ok=True)
++    
++    # if args.testname is not None:
++    #     output_dir = DEFAULT_FOLDER + f"/halut/{args.testname}/checkpoints/"
++    # Path(output_dir).mkdir(parents=True, exist_ok=True)
+     args.output_dir = output_dir
+ 
+     if args.single:
+@@ -481,9 +638,10 @@ if __name__ == "__main__":
+         args_checkpoint.distributed = args.distributed  # type: ignore
+         args_checkpoint.dist_backend = args.dist_backend  # type: ignore
+         args_checkpoint.device = "cuda:" + str(args.gpu)
+-    args_checkpoint.workers = 4  # type: ignore
++    args_checkpoint.workers = args.workers  # type: ignore
+     args_checkpoint.simulate = False  # type: ignore
+     args_checkpoint.testname = args.testname  # type: ignore
++    args_checkpoint.lutmu = args.lutmu  # type: ignore
+     for i in range(idx, total + 1):  # type: ignore
+         args_checkpoint.epochs = epoch + TRAIN_EPOCHS  # type: ignore
+         args_checkpoint.resume = (  # type: ignore
+diff --git a/train/training/train.py b/train/training/train.py
+index ba82de5..60ed601 100644
+--- a/train/training/train.py
++++ b/train/training/train.py
+@@ -24,13 +24,17 @@ sys.path.append(os.getcwd())
+ # pylint: disable=wrong-import-position
+ from training import presets, utils_train
+ from training.timm_model import convert_to_halut
+-from models.resnet import resnet18
++from models.resnet import resnet18, resnet34, resnet50
+ from models.resnet20 import resnet20
+ from models.resnet9 import ResNet9
++from models.qatfc import quant_fc
++from models.qatresnet9 import QuantResNet9
++from models.qatresnet import quant_resnet18, quant_resnet34, quant_resnet50
+ from models.tiny.resnet8 import Resnet8v1EEMBC
+ from halutmatmul.modules import HalutConv2d, HalutLinear
++from halutmatmul.modules import LUTMUConv2d, LUTMULinear
+ 
+-SCRATCH_BASE = "/scratch/janniss"
++SCRATCH_BASE = "."
+ 
+ 
+ def train_one_epoch(
+@@ -61,7 +65,7 @@ def train_one_epoch(
+     )
+ 
+     def halut_updates(module, prefix=""):
+-        if isinstance(module, (HalutConv2d, HalutLinear)):
++        if isinstance(module, (HalutConv2d, HalutLinear, LUTMUConv2d, LUTMULinear)):
+             module.halut_updates()
+             return
+ 
+@@ -106,6 +110,9 @@ def train_one_epoch(
+                 halut_updates(model)
+                 optimizer.zero_grad()
+ 
++        if hasattr(model, 'clip_weights'):
++            model.clip_weights(-1, 1)
++            
+         if model_ema and i % args.model_ema_steps == 0:
+             model_ema.update_parameters(model)
+             if epoch < args.lr_warmup_epochs:
+@@ -261,12 +268,74 @@ def load_data(traindir, valdir, args):
+                     T.Normalize((0.4914, 0.4822, 0.4465), (0.247, 0.243, 0.261)),
+                 ]
+             )
++            SCRATCH_BASE = "."
+             dataset = torchvision.datasets.CIFAR10(
+                 root=SCRATCH_BASE + "/datasets",
+                 train=True,
+                 transform=preprocessing,
+                 download=True,
+             )
++        elif args.mnist:
++            SCRATCH_BASE = "."
++            dataset = torchvision.datasets.MNIST(
++                root=SCRATCH_BASE + "/datasets",
++                train=True,
++                transform=T.Compose([T.ToTensor(),]),
++                download=True,
++            )
++        elif args.imagenet:
++            SCRATCH_BASE = "/media/8tbssd/xz18173/imagenet/"
++            preprocessing = T.Compose(
++                [
++                    # T.Resize(256),
++                    # T.CenterCrop(224),
++                    T.RandomResizedCrop(224),
++                    T.RandomHorizontalFlip(p=0.5),
++                    T.ToTensor(),
++                    # T.Normalize((0.485, 0.456, 0.406), (0.226, 0.226, 0.226)),
++                    T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
++                ]
++            )
++            dataset = torchvision.datasets.ImageFolder(
++                root=SCRATCH_BASE + 'train',
++                transform=preprocessing,
++            )
++        elif args.imagenet_small:
++            SCRATCH_BASE = "/media/8tbssd/xz18173/imagenet_small/"
++            preprocessing = T.Compose(
++                [
++                    # T.Resize(256),
++                    # T.CenterCrop(224),
++                    T.RandomResizedCrop(224),
++                    T.RandomHorizontalFlip(p=0.5),
++                    # T.ColorJitter(0.4, 0.4, 0.4, 0.1),
++                    T.ToTensor(),
++                    # T.Normalize((0.485, 0.456, 0.406), (0.226, 0.226, 0.226)),
++                    T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
++                ]
++            )
++            dataset = torchvision.datasets.ImageFolder(
++                root=SCRATCH_BASE + "train",
++                transform=preprocessing,
++            )
++            
++        elif args.imagenet_tiny:
++            SCRATCH_BASE = "/media/8tbssd/xz18173/imagenet_tiny/"
++            preprocessing = T.Compose(
++                [
++                    # T.Resize(256),
++                    # T.CenterCrop(224),
++                    T.RandomResizedCrop(224),
++                    T.RandomHorizontalFlip(p=0.5),
++                    T.ToTensor(),
++                    # T.Normalize((0.485, 0.456, 0.406), (0.226, 0.226, 0.226)),
++                    T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
++                ]
++            )
++            dataset = torchvision.datasets.ImageFolder(
++                root=SCRATCH_BASE + "train",
++                transform=preprocessing,
++            )
+         else:
+             dataset = torchvision.datasets.ImageFolder(traindir, preprocessing)
+         if args.cache_dataset:
+@@ -319,6 +388,56 @@ def load_data(traindir, valdir, args):
+                 transform=preprocessing,
+                 download=True,
+             )
++        elif args.mnist:
++            dataset_test = torchvision.datasets.MNIST(
++                root=SCRATCH_BASE + "/datasets",
++                train=False,
++                transform=T.Compose([T.ToTensor(),]),
++                download=True,
++            )
++        elif args.imagenet:
++            SCRATCH_BASE = "/media/8tbssd/xz18173/imagenet/"
++            preprocessing = T.Compose(
++                [
++                    T.Resize(256),
++                    T.CenterCrop(224),
++                    T.ToTensor(),
++                    T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
++                ]
++            )
++            dataset_test = torchvision.datasets.ImageFolder(
++                root=SCRATCH_BASE + 'val',
++                transform=preprocessing,
++            )
++        elif args.imagenet_small:
++            SCRATCH_BASE = "/media/8tbssd/xz18173/imagenet_small/"
++            preprocessing = T.Compose(
++                [
++                    T.Resize(256),
++                    T.CenterCrop(224),
++                    T.ToTensor(),
++                    T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
++                ]
++            )
++            dataset_test = torchvision.datasets.ImageFolder(
++                root=SCRATCH_BASE + "val",
++                transform=preprocessing,
++            )
++            
++        elif args.imagenet_tiny:
++            SCRATCH_BASE = "/media/8tbssd/xz18173/imagenet_tiny/"
++            preprocessing = T.Compose(
++                [
++                    T.Resize(256),
++                    T.CenterCrop(224),
++                    T.ToTensor(),
++                    T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
++                ]
++            )
++            dataset_test = torchvision.datasets.ImageFolder(
++                root=SCRATCH_BASE + "val",
++                transform=preprocessing,
++            )
+         else:
+             dataset_test = torchvision.datasets.ImageFolder(
+                 valdir,
+@@ -401,6 +520,49 @@ def main(args, gradient_accumulation_steps=1):
+             model = ResNet9(3, num_classes)
+         elif args.model == "resnet8":
+             model = Resnet8v1EEMBC()
++        elif args.model == "quant_resnet9":
++            model = QuantResNet9(3, num_classes,
++                                weight_bit_width = args.bitwidth,
++                                act_bit_width = args.bitwidth,)
++    elif args.mnist:
++        model = quant_fc(weight_bit_width = args.bitwidth,
++                        act_bit_width = args.bitwidth,
++                        in_bit_width = args.bitwidth,
++                        out_features = [256, 256, 256],
++                        num_classes = num_classes)
++        
++    elif args.imagenet or args.imagenet_small or args.imagenet_tiny:
++        if args.model == 'quant_resnet18':
++            model = quant_resnet18(weight_bit_width = args.bitwidth, 
++                                   act_bit_width = args.bitwidth,  
++                                   num_classes = num_classes, 
++                                   is_imagenet = True)
++            
++        elif args.model == 'quant_resnet34':
++            model = quant_resnet34(weight_bit_width = args.bitwidth, 
++                                   act_bit_width = args.bitwidth, 
++                                   num_classes = num_classes, 
++                                   is_imagenet = True)
++            
++        elif args.model == 'quant_resnet50':
++            model = quant_resnet50(weight_bit_width = args.bitwidth, 
++                                   act_bit_width = args.bitwidth, 
++                                   num_classes = num_classes, 
++                                   is_imagenet = True)
++            
++        elif args.model == 'resnet18':
++            model = resnet18(
++                **{"is_cifar": False, "num_classes": num_classes}
++            )
++        elif args.model == 'resnet34':
++            model = resnet34(
++                **{"is_cifar": False, "num_classes": num_classes}
++            )
++        elif args.model == 'resnet50':
++            model = resnet50(
++                **{"is_cifar": False, "num_classes": num_classes}
++            )
++        
+     else:
+         model = torchvision.models.get_model(
+             args.model, pretrained=True, num_classes=num_classes
+@@ -412,6 +574,19 @@ def main(args, gradient_accumulation_steps=1):
+         checkpoint = torch.load(args.resume, map_location="cpu")
+         # load to update halut deactivated layers
+         model.load_state_dict(checkpoint["model"])
++    
++    def check_use_lutmu(module, prefix=""):
++        if isinstance(module, (LUTMUConv2d)):
++            # print(module, module.halut_active)
++            if module.halut_active:
++                module.use_lutmu = args.lutmu
++            return
++        for child_name, child_module in module.named_children():
++            child_prefix = f"{prefix}.{child_name}" if prefix != "" else child_name
++            check_use_lutmu(child_module, prefix=child_prefix)
++            
++    check_use_lutmu(model)
++    # model.disable_act_quant()
+     model.to(device)
+ 
+     if args.distributed and args.sync_bn:
+@@ -430,7 +605,7 @@ def main(args, gradient_accumulation_steps=1):
+         for name, p in module.named_parameters(recurse=False):
+             if not p.requires_grad:
+                 continue
+-            if isinstance(module, (HalutConv2d, HalutLinear)):
++            if isinstance(module, (HalutConv2d, HalutLinear, LUTMUConv2d, LUTMULinear)):
+                 if name == "thresholds":
+                     params["thresholds"].append(p)
+                     continue
+@@ -440,7 +615,7 @@ def main(args, gradient_accumulation_steps=1):
+                 if name == "lut":
+                     params["lut"].append(p)
+                     continue
+-            print("add to other", prefix, name)
++            # print("add to other", prefix, name)
+             params["other"].append(p)
+ 
+         for child_name, child_module in module.named_children():
+@@ -612,6 +787,8 @@ def main(args, gradient_accumulation_steps=1):
+     start_time = time.time()
+     best_acc = 0.0
+     testname = ""
++    early_exit_thresholds = args.early_exit_thresholds # exit training if accuracy didn't improve
++    early_exit_counter = 0
+     # check if key in dict
+     if "testname" in args and args.testname is not None:
+         testname = args.testname
+@@ -714,6 +891,11 @@ def main(args, gradient_accumulation_steps=1):
+                     checkpoint,
+                     os.path.join(args.output_dir, f"model_best-{best_acc:.2f}.pth"),
+                 )
++                
++                early_exit_counter = 0
++            else:
++                early_exit_counter += 1
++                
+             # utils_train.save_on_master(
+             #     checkpoint, os.path.join(args.output_dir, f"model_{epoch}.pth")
+             # )
+@@ -742,7 +924,11 @@ def main(args, gradient_accumulation_steps=1):
+             if optimizer_lr_local <= args.min_lr_to_break:
+                 print("learning rate too small, stop training")
+                 break
+-
++            
++        if early_exit_counter >= early_exit_thresholds:
++            print(f"Accuracy didn't improve for {early_exit_thresholds} epochs, stop training")
++            break
++        
+     if args.distributed:
+         torch.distributed.barrier()
+     total_time = time.time() - start_time
+@@ -759,7 +945,7 @@ def get_args_parser(add_help=True):
+ 
+     parser.add_argument(
+         "--data-path",
+-        default="/scratch/ml_datasets/ILSVRC2012",
++        default=".",
+         type=str,
+         help="dataset path",
+     )
+@@ -1003,12 +1189,53 @@ def get_args_parser(add_help=True):
+         help="Uses CIFAR10 dataset",
+     )
+ 
++    parser.add_argument(
++        "--mnist",
++        action="store_true",
++        help="Uses mnist dataset",
++    )
++    
++    parser.add_argument(
++        "--imagenet",
++        action="store_true",
++        help="Uses IMAGENET dataset",
++    )
++    
++    parser.add_argument(
++        "--imagenet_small",
++        action="store_true",
++        help="Uses IMAGENET_SMALL dataset",
++    )
++    parser.add_argument(
++        "--imagenet_tiny",
++        action="store_true",
++        help="Uses IMAGENET_TINY dataset",
++    )
++    
+     parser.add_argument(
+         "--simulate",
+         action="store_true",
+         help="Simulate the training process",
+     )
+ 
++    parser.add_argument(
++        "--early-exit-thresholds",
++        default=150,
++        type=int,
++        help="Early exit training if accuracy didn't improve for these many epochs",
++    )
++    parser.add_argument(
++        "--lutmu",
++        action="store_true",
++        help="use special kn2col slice method for lutmu",
++    )
++    parser.add_argument(
++        "--bitwidth",
++        default=4,
++        help="the quantisation bitwidth (default 4 bits activation and 4 bits weights)",
++        type=int,
++    )
++    
+     return parser
+ 
+ 
+diff --git a/train/training/train_quantization.py b/train/training/train_quantization.py
+index f73507c..8c2a1b4 100644
+--- a/train/training/train_quantization.py
++++ b/train/training/train_quantization.py
+@@ -21,7 +21,7 @@ import torch.utils.data
+ from torch import nn
+ 
+ import utils_train as utils
+-from train import evaluate, load_data, train_one_epoch
++from training.train import evaluate, load_data, train_one_epoch
+ from models.resnet9 import ResNet9
+ 
+ # pylint: disable=line-too-long
+diff --git a/train/utils/analysis_helper.py b/train/utils/analysis_helper.py
+index f16072c..8104413 100644
+--- a/train/utils/analysis_helper.py
++++ b/train/utils/analysis_helper.py
+@@ -249,6 +249,12 @@ def json_to_dataframe(
+     df.columns = df.columns.str.replace(layer_name + ".", "")
+     return df
+ 
++quant_fc = [
++    "features.2",
++    "features.6",
++    "features.10",
++    "features.14",
++]
+ 
+ resnet18_layers = [
+     "layer1.0.conv1",
+@@ -258,19 +264,39 @@ resnet18_layers = [
+     "layer2.0.conv1",
+     "layer2.0.conv2",
+     "layer2.0.downsample.0",
++    # "layer2.1.conv1",
++    # "layer2.1.conv2",
++    # "layer3.0.conv1",
++    # "layer3.0.conv2",
++    # "layer3.0.downsample.0",
++    # "layer3.1.conv1",
++    # "layer3.1.conv2",
++    # "layer4.0.conv1",
++    # "layer4.0.conv2",
++    # "layer4.0.downsample.0",
++    # "layer4.1.conv1",
++    # "layer4.1.conv2",
++    # "fc",
++]
++
++quant_resnet50 = [
++    "layer1.0.conv1",
++    "layer1.0.conv2",
++    "layer1.0.conv3",
++    "layer1.0.downsample.0",
++    "layer1.1.conv1",
++    "layer1.1.conv2",
++    "layer1.1.conv3",
++    "layer1.2.conv1",
++    "layer1.2.conv2",
++    "layer1.2.conv3",
++    "layer2.0.conv1",
++    "layer2.0.conv2",
++    "layer2.0.conv3",
++    "layer2.0.downsample.0",
+     "layer2.1.conv1",
+     "layer2.1.conv2",
+-    "layer3.0.conv1",
+-    "layer3.0.conv2",
+-    "layer3.0.downsample.0",
+-    "layer3.1.conv1",
+-    "layer3.1.conv2",
+-    "layer4.0.conv1",
+-    "layer4.0.conv2",
+-    "layer4.0.downsample.0",
+-    "layer4.1.conv1",
+-    "layer4.1.conv2",
+-    "fc",
++    "layer2.1.conv3",
+ ]
+ 
+ resnet20_layers = [
+@@ -381,12 +407,20 @@ def get_layers(name: available_models) -> list[str]:
+         return layers_interesting
+     elif name == "resnet18":
+         return resnet18_layers
++    elif name == "quant_resnet18":
++        return resnet18_layers
+     elif name == "resnet20":
+         return resnet20_layers
+     elif name == "resnet9":
+         return resnet9_layers
++    elif name == "quant_resnet9":
++        return resnet9_layers
+     elif name == "resnet8":
+         return resnet8_layers
++    elif name == "quant_resnet50":
++        return quant_resnet50
++    elif name == "quant_fc":
++        return quant_fc
+     else:
+         return Exception("Model name not supported: ", name)  # type: ignore
+ 
+-- 
+2.43.0
+

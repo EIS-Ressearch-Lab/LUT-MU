@@ -1,0 +1,63 @@
+From 70e4f577026c5b689cb46596f31e29212b21e497 Mon Sep 17 00:00:00 2001
+From: PeiGiZhu <peigizhu@outlook.com>
+Date: Tue, 9 Jun 2026 14:36:06 +0000
+Subject: [PATCH 4/4] other updates in train
+
+---
+ train/.gitignore   |  7 ++++---
+ train/check_pth.py | 22 ++++++++++++++++++++++
+ 2 files changed, 26 insertions(+), 3 deletions(-)
+ create mode 100644 train/check_pth.py
+
+diff --git a/train/.gitignore b/train/.gitignore
+index 83e0d66..81eb78c 100644
+--- a/train/.gitignore
++++ b/train/.gitignore
+@@ -11,10 +11,11 @@
+ 
+ build/
+ *.v
+-.datasets
+ .dvt/
+-runs
+ 
+-tools
++results
++runs
++datasets
++model_checkpoints
+ 
+ *.log
+\ No newline at end of file
+diff --git a/train/check_pth.py b/train/check_pth.py
+new file mode 100644
+index 0000000..63368b3
+--- /dev/null
++++ b/train/check_pth.py
+@@ -0,0 +1,22 @@
++import torch
++from torch import nn
++import os
++
++if __name__ == "__main__":
++
++    path = "./model_checkpoints/qatresnet50_4Bit_imagenet_lr0.1_sgd_batch_256_epoch100/halut/lutmu_kn2col_custom_C_K_lr_0.0005/checkpoints"
++    files = os.listdir(path)
++    
++    for file in files:
++        if "model_best" in file or "checkpoint.pth" in file:
++            file_path = os.path.join(path, file)
++            state_dict = torch.load(file_path, map_location=torch.device('cpu'))
++            
++        
++            if 'halut_modules' in state_dict:
++                print(file, state_dict['epoch'], state_dict['args'].batch_size, state_dict['args'].lr, state_dict['halut_modules'].keys())
++            else:
++                print(file, state_dict['epoch'], state_dict['args'].batch_size, state_dict['args'].lr, "No halut modules found")
++
++
++    
+\ No newline at end of file
+-- 
+2.43.0
+
