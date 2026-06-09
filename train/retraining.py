@@ -18,7 +18,7 @@ from training import utils_train
 from training.utils_train import save_on_master, set_weight_decay  # type: ignore[attr-defined]
 from training.train import load_data, main  # type: ignore[attr-defined]
 from utils.analysis_helper import get_layers, sys_info
-from models.resnet import resnet18
+from models.resnet import resnet18, resnet34, resnet50
 from models.resnet9 import ResNet9
 from models.resnet20 import resnet20
 from models.tiny.resnet8 import Resnet8v1EEMBC
@@ -26,6 +26,10 @@ from halutmatmul.halutmatmul import HalutModuleConfig
 from halutmatmul.model import HalutHelper, get_module_by_name
 from halutmatmul.modules import HalutConv2d, HalutLinear
 
+from models.qatfc import quant_fc
+from models.qatresnet9 import QuantResNet9
+from models.qatresnet import quant_resnet18, quant_resnet34, quant_resnet50
+from halutmatmul.modules import LUTMUConv2d, LUTMULinear
 
 def load_model(
     checkpoint_path: str,
@@ -75,6 +79,49 @@ def load_model(
             model = ResNet9(3, num_classes)  # type: ignore
         elif args.model == "resnet8":
             model = Resnet8v1EEMBC()  # type: ignore
+        elif args.model == "quant_resnet9":
+            model = QuantResNet9(3, num_classes,
+                                weight_bit_width = args.bitwidth,
+                                act_bit_width = args.bitwidth,)
+    elif args.mnist:
+        model = quant_fc(weight_bit_width = args.bitwidth,
+                        act_bit_width = args.bitwidth,
+                        in_bit_width = args.bitwidth,
+                        out_features = [256, 256, 256],
+                        num_classes = num_classes)
+        
+    elif args.imagenet or args.imagenet_small or args.imagenet_tiny:
+        if args.model == 'quant_resnet18':
+            model = quant_resnet18(weight_bit_width = args.bitwidth, 
+                                   act_bit_width = args.bitwidth,  
+                                   num_classes = num_classes, 
+                                   is_imagenet = True)
+            
+        elif args.model == 'quant_resnet34':
+            model = quant_resnet34(weight_bit_width = args.bitwidth, 
+                                   act_bit_width = args.bitwidth, 
+                                   num_classes = num_classes, 
+                                   is_imagenet = True)
+            
+        elif args.model == 'quant_resnet50':
+            model = quant_resnet50(weight_bit_width = args.bitwidth, 
+                                   act_bit_width = args.bitwidth, 
+                                   num_classes = num_classes, 
+                                   is_imagenet = True)
+            
+        elif args.model == 'resnet18':
+            model = resnet18(
+                **{"is_cifar": False, "num_classes": num_classes}
+            )
+        elif args.model == 'resnet34':
+            model = resnet34(
+                **{"is_cifar": False, "num_classes": num_classes}
+            )
+        elif args.model == 'resnet50':
+            model = resnet50(
+                **{"is_cifar": False, "num_classes": num_classes}
+            )
+        
     else:
         # model = timm.create_model(args.model, pretrained=True, num_classes=num_classes)
         model = torchvision.models.get_model(
@@ -136,15 +183,15 @@ def run_retraining(
         halut_data_path += "/" + model_name
     Path(halut_data_path).mkdir(parents=True, exist_ok=True)
 
-    model_copy = deepcopy(model)
-    model.to(args.gpu)
-
     torch.cuda.set_device(args.gpu)
     sys_info()
     device = torch.device(
         "cuda:" + str(args.gpu) if torch.cuda.is_available() else "cpu"
     )
 
+    model_copy = deepcopy(model)
+    model.to(device)
+    
     if not hasattr(args, "distributed"):
         args.distributed = False
 
@@ -161,6 +208,7 @@ def run_retraining(
         report_error=False,
         distributed=args.distributed,
         device_id=args.gpu,
+        # use_lutmu = args.lutmu, # Patch added a trigger for activating lutmu kn2col slicing
     )
     halut_model.print_available_module()
     layers = get_layers(model_name)  # type: ignore[arg-type]
@@ -170,19 +218,38 @@ def run_retraining(
         halut_modules = {}
     else:
         next_layer_idx = len(halut_modules.keys())
-    K = 16
+    
+    # Patch added to load kc_config if available
+    length_per_codebook: list[int] = []
+    prototype_per_codebook: list[int] = []
+    
+    if args.kc_config is not None:
+        
+        with open(args.kc_config, 'r') as f:
+            kc_config = json.load(f)
+        length_per_codebook = kc_config['length_per_codebook']
+        prototype_per_codebook = kc_config['prototype_per_codebook']
+        
+    else:
+        K = args.nprototype
+        C = args.codebook
+        
+        length_per_codebook = [C]*len(layers)
+        prototype_per_codebook = [K]*len(layers)
+        
     use_prototype = False
-
+    use_lutmu = args.lutmu
+    
     max = len(layers)
     max = next_layer_idx + 1
     for i in range(next_layer_idx, max):
         if not test_only and i < len(layers):
             next_layer = layers[i]
-            c_base = 16
-            loop_order = "im2col"  # kn2col only tested experimentally
-            c_ = c_base
+            # loop_order = "im2col"  # kn2col only tested experimentally
+            loop_order = "kn2col" if args.kn2col else "im2col"
             module_ref = get_module_by_name(halut_model.model, next_layer)
-            if isinstance(module_ref, HalutConv2d):
+            print("module_ref", module_ref)
+            if isinstance(module_ref, (HalutConv2d, LUTMUConv2d)):
                 inner_dim_im2col = (
                     module_ref.in_channels
                     * module_ref.kernel_size[0]
@@ -193,33 +260,58 @@ def run_retraining(
                     c_ = inner_dim_im2col // 9  # 9 = 3x3
                     if module_ref.kernel_size[0] * module_ref.kernel_size[1] == 1:
                         c_ = inner_dim_im2col // 4
+                elif loop_order == "kn2col":
+                    
+                    if use_lutmu:
+                        c_ = inner_dim_kn2col // length_per_codebook[i]  # lutmu specific
+                    else:
+                        c_ = (
+                            inner_dim_kn2col // 8
+                        )  # little lower than 9 but safer to work now
                 else:
-                    c_ = (
-                        inner_dim_kn2col // 8
-                    )  # little lower than 9 but safer to work now
+                    raise ValueError("Unknown loop order {}".format(loop_order))
+                
                 if "downsample" in next_layer or "shortcut" in next_layer:
-                    loop_order = "im2col"
-                    c_ = inner_dim_im2col // 4
-            print("module_ref", module_ref)
-            if isinstance(module_ref, HalutLinear):
-                c_ = 256 // 4
-            modules = {next_layer: [c_, K, loop_order, use_prototype]} | halut_modules
+                    if loop_order == "im2col":
+                        c_ = inner_dim_im2col // 4
+                    elif loop_order == "kn2col":
+                        if use_lutmu:
+                            # Patch added for lutmu kn2col downsample handling
+                            c_ = inner_dim_kn2col // length_per_codebook[i]  # lutmu specific
+                        else:
+                            # original version converts downsample to im2col when loop_order is kn2col
+                            loop_order = "im2col"
+                            c_ = inner_dim_kn2col // 4
+                    else:
+                        raise ValueError("Unknown loop order {}".format(loop_order))
+                
+            
+            if isinstance(module_ref, (HalutLinear, LUTMULinear)):
+                c_ = module_ref.in_features//length_per_codebook[i]
+                
+            modules = {next_layer: [c_, prototype_per_codebook[i], loop_order, use_prototype, use_lutmu]} | halut_modules
+            
         else:
             modules = halut_modules
+    
         for k, v in modules.items():
             if len(v) > 3:
+                # modules[next_layer] with 5 items (Conv) will enter this branch
                 halut_model.activate_halut_module(
                     k,
                     C=v[HalutModuleConfig.C],  # type: ignore
                     K=v[HalutModuleConfig.K],  # type: ignore
                     loop_order=v[HalutModuleConfig.LOOP_ORDER],  # type: ignore
                     use_prototypes=v[HalutModuleConfig.USE_PROTOTYPES],  # type: ignore
+                    use_lutmu=v[HalutModuleConfig.USE_LUTMU],  # type: ignore
                 )
             else:
+                # previous halut_modules with 3 items (Linear) will enter this branch
                 halut_model.activate_halut_module(
                     k,
                     C=v[HalutModuleConfig.C],  # type: ignore
                     K=v[HalutModuleConfig.K],  # type: ignore
+                    use_prototypes=v[HalutModuleConfig.USE_PROTOTYPES],  # type: ignore
                 )
     if args.distributed:
         dist.barrier()
@@ -247,7 +339,7 @@ def run_retraining(
             for name, p in module.named_parameters(recurse=False):
                 if not p.requires_grad:
                     continue
-                if isinstance(module, (HalutConv2d, HalutLinear)):
+                if isinstance(module, (HalutConv2d, HalutLinear, LUTMUConv2d, LUTMULinear)):
                     if name == "thresholds":
                         params["thresholds"].append(p)
                         continue
@@ -354,13 +446,13 @@ def run_retraining(
                 ),
             )
 
-    result_base_path = args.resultpath
-    if model_name not in result_base_path.lower():
-        result_base_path += "/" + model_name + "/"
+    result_base_path = os.path.join(args.resultpath, model_name, args.testname)
+        
     Path(result_base_path).mkdir(parents=True, exist_ok=True)
+    
     if not args.distributed or args.rank == 0:
         with open(
-            f"{args.resultpath}/retrained_{len(halut_model.halut_modules.keys())}"
+            f"{result_base_path}/retrained_{len(halut_model.halut_modules.keys())}"
             f"{'_trained' if test_only else ''}.json",
             "w",
         ) as fp:
@@ -373,16 +465,77 @@ def run_retraining(
 
 
 if __name__ == "__main__":
-    DEFAULT_FOLDER = "/scratch2/janniss/"
-    MODEL_NAME_EXTENSION = "cifar10-halut-resnet9"
-    TRAIN_EPOCHS = 25  # 25 layer-per-layer, 300 fine-tuning
-    BATCH_SIZE = 128  # 128
-    LR = 0.001  # 0.001/0.002 layer-per-payer, 0.0005 fine-tuning
+    DEFAULT_FOLDER = "."
+    # MODEL_NAME_EXTENSION = "cifar10-halut-resnet9"
+    # TRAIN_EPOCHS = 25  # 25 layer-per-layer, 300 fine-tuning
+    # BATCH_SIZE = 128  # 128
+    # LR = 0.001  # 0.001/0.002 layer-per-payer, 0.0005 fine-tuning
     GRADIENT_ACCUMULATION_STEPS = 1
     parser = argparse.ArgumentParser(description="Replace layer with halut")
     parser.add_argument(
         "cuda_id", metavar="N", type=int, help="id of cuda_card", default=0
     )
+    parser.add_argument(
+        "-workdir",
+        type=str,
+        help="workdir",
+        default=f'{DEFAULT_FOLDER}',
+    )
+    parser.add_argument(
+        "-j",
+        "--workers",
+        default=4,
+        type=int,
+        metavar="N",
+        help="number of data loading workers (default: 16)",
+    )
+    parser.add_argument(
+        "-batch_size",
+        type=int,
+        default=128,
+    )
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=25,
+    )
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=0.0001,
+        help="learning rate",
+    )
+    parser.add_argument(
+        "--kc_config",
+        type=str,
+        help="json file path for codebook and prototype configuration",
+        default=None,
+    )
+    parser.add_argument(
+        "--kn2col",
+        action="store_true",
+        help="use kn2col method",
+    )
+    
+    parser.add_argument(
+        "-nprototype",
+        default= 16,
+        type=int,
+    )
+    
+    parser.add_argument(
+        "-codebook",
+        default= 8,
+        type=int,
+    )
+    
+    parser.add_argument(
+        "--lutmu",
+        action="store_true",
+        help="use lutmu kn2col method",
+    )
+    
+    # MUST HAVE. Format: model name + version numbe
     parser.add_argument(
         "-testname",
         type=str,
@@ -393,13 +546,13 @@ if __name__ == "__main__":
         "-halutdata",
         type=str,
         help="halut data path",
-        default=DEFAULT_FOLDER + f"/halut/resnet9-{MODEL_NAME_EXTENSION}",
+        default=None,
     )
     parser.add_argument(
         "-learned",
         type=str,
         help="halut learned path",
-        default=DEFAULT_FOLDER + f"/halut/resnet9-{MODEL_NAME_EXTENSION}/learned",
+        default=None,
     )
     parser.add_argument("-C", type=int, help="C", default=64)
     parser.add_argument("-modelname", type=str, help="model name", default="resnet18")
@@ -407,17 +560,15 @@ if __name__ == "__main__":
         "-resultpath",
         type=str,
         help="result_path",
-        default=f"./results/data/resnet9-{MODEL_NAME_EXTENSION}/",
+        default=f"./results/data/",
     )
+    # MUST HAVE. It is where to take original model trained parameter (pth in DEFAULT_FOLDER).
     parser.add_argument(
         "-checkpoint",
         type=str,
         help="check_point_path",
         # WILL BE OVERWRITTEN!!!
-        default=(
-            f"/scratch2/janniss/model_checkpoints/{MODEL_NAME_EXTENSION}/retrained_checkpoint.pth"
-            # f"/scratch2/janniss/model_checkpoints/cifar10/checkpoint.pth"
-        ),
+        default=None
     )
     parser.add_argument(
         "-single",
@@ -437,16 +588,22 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     print(args)
-
+    BATCH_SIZE = args.batch_size
+    TRAIN_EPOCHS = args.epochs
+    LR = args.lr
+    
     if args.testname is not None:
-        args.resultpath = f"./results/data/{args.testname}/"
-        args.halutdata = DEFAULT_FOLDER + f"/halut/{args.testname}/"
-        args.learned = DEFAULT_FOLDER + f"/halut/{args.testname}/learned/"
-
-    output_dir = os.path.dirname(args.checkpoint)
-    if args.testname is not None:
-        output_dir = DEFAULT_FOLDER + f"/halut/{args.testname}/checkpoints/"
+        args.halutdata = args.workdir + f"/halut/{args.testname}/"
+        args.learned = args.workdir + f"/halut/{args.testname}/learned/"
+        output_dir = args.workdir + f"/halut/{args.testname}/checkpoints/"
+    else:
+        raise ValueError("testname argument must be provided.")
+    
     Path(output_dir).mkdir(parents=True, exist_ok=True)
+    
+    # if args.testname is not None:
+    #     output_dir = DEFAULT_FOLDER + f"/halut/{args.testname}/checkpoints/"
+    # Path(output_dir).mkdir(parents=True, exist_ok=True)
     args.output_dir = output_dir
 
     if args.single:
@@ -481,9 +638,10 @@ if __name__ == "__main__":
         args_checkpoint.distributed = args.distributed  # type: ignore
         args_checkpoint.dist_backend = args.dist_backend  # type: ignore
         args_checkpoint.device = "cuda:" + str(args.gpu)
-    args_checkpoint.workers = 4  # type: ignore
+    args_checkpoint.workers = args.workers  # type: ignore
     args_checkpoint.simulate = False  # type: ignore
     args_checkpoint.testname = args.testname  # type: ignore
+    args_checkpoint.lutmu = args.lutmu  # type: ignore
     for i in range(idx, total + 1):  # type: ignore
         args_checkpoint.epochs = epoch + TRAIN_EPOCHS  # type: ignore
         args_checkpoint.resume = (  # type: ignore

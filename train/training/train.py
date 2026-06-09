@@ -24,13 +24,17 @@ sys.path.append(os.getcwd())
 # pylint: disable=wrong-import-position
 from training import presets, utils_train
 from training.timm_model import convert_to_halut
-from models.resnet import resnet18
+from models.resnet import resnet18, resnet34, resnet50
 from models.resnet20 import resnet20
 from models.resnet9 import ResNet9
+from models.qatfc import quant_fc
+from models.qatresnet9 import QuantResNet9
+from models.qatresnet import quant_resnet18, quant_resnet34, quant_resnet50
 from models.tiny.resnet8 import Resnet8v1EEMBC
 from halutmatmul.modules import HalutConv2d, HalutLinear
+from halutmatmul.modules import LUTMUConv2d, LUTMULinear
 
-SCRATCH_BASE = "/scratch/janniss"
+SCRATCH_BASE = "."
 
 
 def train_one_epoch(
@@ -61,7 +65,7 @@ def train_one_epoch(
     )
 
     def halut_updates(module, prefix=""):
-        if isinstance(module, (HalutConv2d, HalutLinear)):
+        if isinstance(module, (HalutConv2d, HalutLinear, LUTMUConv2d, LUTMULinear)):
             module.halut_updates()
             return
 
@@ -106,6 +110,9 @@ def train_one_epoch(
                 halut_updates(model)
                 optimizer.zero_grad()
 
+        if hasattr(model, 'clip_weights'):
+            model.clip_weights(-1, 1)
+            
         if model_ema and i % args.model_ema_steps == 0:
             model_ema.update_parameters(model)
             if epoch < args.lr_warmup_epochs:
@@ -261,11 +268,73 @@ def load_data(traindir, valdir, args):
                     T.Normalize((0.4914, 0.4822, 0.4465), (0.247, 0.243, 0.261)),
                 ]
             )
+            SCRATCH_BASE = "."
             dataset = torchvision.datasets.CIFAR10(
                 root=SCRATCH_BASE + "/datasets",
                 train=True,
                 transform=preprocessing,
                 download=True,
+            )
+        elif args.mnist:
+            SCRATCH_BASE = "."
+            dataset = torchvision.datasets.MNIST(
+                root=SCRATCH_BASE + "/datasets",
+                train=True,
+                transform=T.Compose([T.ToTensor(),]),
+                download=True,
+            )
+        elif args.imagenet:
+            SCRATCH_BASE = "/media/8tbssd/xz18173/imagenet/"
+            preprocessing = T.Compose(
+                [
+                    # T.Resize(256),
+                    # T.CenterCrop(224),
+                    T.RandomResizedCrop(224),
+                    T.RandomHorizontalFlip(p=0.5),
+                    T.ToTensor(),
+                    # T.Normalize((0.485, 0.456, 0.406), (0.226, 0.226, 0.226)),
+                    T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+                ]
+            )
+            dataset = torchvision.datasets.ImageFolder(
+                root=SCRATCH_BASE + 'train',
+                transform=preprocessing,
+            )
+        elif args.imagenet_small:
+            SCRATCH_BASE = "/media/8tbssd/xz18173/imagenet_small/"
+            preprocessing = T.Compose(
+                [
+                    # T.Resize(256),
+                    # T.CenterCrop(224),
+                    T.RandomResizedCrop(224),
+                    T.RandomHorizontalFlip(p=0.5),
+                    # T.ColorJitter(0.4, 0.4, 0.4, 0.1),
+                    T.ToTensor(),
+                    # T.Normalize((0.485, 0.456, 0.406), (0.226, 0.226, 0.226)),
+                    T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+                ]
+            )
+            dataset = torchvision.datasets.ImageFolder(
+                root=SCRATCH_BASE + "train",
+                transform=preprocessing,
+            )
+            
+        elif args.imagenet_tiny:
+            SCRATCH_BASE = "/media/8tbssd/xz18173/imagenet_tiny/"
+            preprocessing = T.Compose(
+                [
+                    # T.Resize(256),
+                    # T.CenterCrop(224),
+                    T.RandomResizedCrop(224),
+                    T.RandomHorizontalFlip(p=0.5),
+                    T.ToTensor(),
+                    # T.Normalize((0.485, 0.456, 0.406), (0.226, 0.226, 0.226)),
+                    T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+                ]
+            )
+            dataset = torchvision.datasets.ImageFolder(
+                root=SCRATCH_BASE + "train",
+                transform=preprocessing,
             )
         else:
             dataset = torchvision.datasets.ImageFolder(traindir, preprocessing)
@@ -318,6 +387,56 @@ def load_data(traindir, valdir, args):
                 train=False,
                 transform=preprocessing,
                 download=True,
+            )
+        elif args.mnist:
+            dataset_test = torchvision.datasets.MNIST(
+                root=SCRATCH_BASE + "/datasets",
+                train=False,
+                transform=T.Compose([T.ToTensor(),]),
+                download=True,
+            )
+        elif args.imagenet:
+            SCRATCH_BASE = "/media/8tbssd/xz18173/imagenet/"
+            preprocessing = T.Compose(
+                [
+                    T.Resize(256),
+                    T.CenterCrop(224),
+                    T.ToTensor(),
+                    T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+                ]
+            )
+            dataset_test = torchvision.datasets.ImageFolder(
+                root=SCRATCH_BASE + 'val',
+                transform=preprocessing,
+            )
+        elif args.imagenet_small:
+            SCRATCH_BASE = "/media/8tbssd/xz18173/imagenet_small/"
+            preprocessing = T.Compose(
+                [
+                    T.Resize(256),
+                    T.CenterCrop(224),
+                    T.ToTensor(),
+                    T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+                ]
+            )
+            dataset_test = torchvision.datasets.ImageFolder(
+                root=SCRATCH_BASE + "val",
+                transform=preprocessing,
+            )
+            
+        elif args.imagenet_tiny:
+            SCRATCH_BASE = "/media/8tbssd/xz18173/imagenet_tiny/"
+            preprocessing = T.Compose(
+                [
+                    T.Resize(256),
+                    T.CenterCrop(224),
+                    T.ToTensor(),
+                    T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+                ]
+            )
+            dataset_test = torchvision.datasets.ImageFolder(
+                root=SCRATCH_BASE + "val",
+                transform=preprocessing,
             )
         else:
             dataset_test = torchvision.datasets.ImageFolder(
@@ -401,6 +520,49 @@ def main(args, gradient_accumulation_steps=1):
             model = ResNet9(3, num_classes)
         elif args.model == "resnet8":
             model = Resnet8v1EEMBC()
+        elif args.model == "quant_resnet9":
+            model = QuantResNet9(3, num_classes,
+                                weight_bit_width = args.bitwidth,
+                                act_bit_width = args.bitwidth,)
+    elif args.mnist:
+        model = quant_fc(weight_bit_width = args.bitwidth,
+                        act_bit_width = args.bitwidth,
+                        in_bit_width = args.bitwidth,
+                        out_features = [256, 256, 256],
+                        num_classes = num_classes)
+        
+    elif args.imagenet or args.imagenet_small or args.imagenet_tiny:
+        if args.model == 'quant_resnet18':
+            model = quant_resnet18(weight_bit_width = args.bitwidth, 
+                                   act_bit_width = args.bitwidth,  
+                                   num_classes = num_classes, 
+                                   is_imagenet = True)
+            
+        elif args.model == 'quant_resnet34':
+            model = quant_resnet34(weight_bit_width = args.bitwidth, 
+                                   act_bit_width = args.bitwidth, 
+                                   num_classes = num_classes, 
+                                   is_imagenet = True)
+            
+        elif args.model == 'quant_resnet50':
+            model = quant_resnet50(weight_bit_width = args.bitwidth, 
+                                   act_bit_width = args.bitwidth, 
+                                   num_classes = num_classes, 
+                                   is_imagenet = True)
+            
+        elif args.model == 'resnet18':
+            model = resnet18(
+                **{"is_cifar": False, "num_classes": num_classes}
+            )
+        elif args.model == 'resnet34':
+            model = resnet34(
+                **{"is_cifar": False, "num_classes": num_classes}
+            )
+        elif args.model == 'resnet50':
+            model = resnet50(
+                **{"is_cifar": False, "num_classes": num_classes}
+            )
+        
     else:
         model = torchvision.models.get_model(
             args.model, pretrained=True, num_classes=num_classes
@@ -412,6 +574,19 @@ def main(args, gradient_accumulation_steps=1):
         checkpoint = torch.load(args.resume, map_location="cpu")
         # load to update halut deactivated layers
         model.load_state_dict(checkpoint["model"])
+    
+    def check_use_lutmu(module, prefix=""):
+        if isinstance(module, (LUTMUConv2d)):
+            # print(module, module.halut_active)
+            if module.halut_active:
+                module.use_lutmu = args.lutmu
+            return
+        for child_name, child_module in module.named_children():
+            child_prefix = f"{prefix}.{child_name}" if prefix != "" else child_name
+            check_use_lutmu(child_module, prefix=child_prefix)
+            
+    check_use_lutmu(model)
+    # model.disable_act_quant()
     model.to(device)
 
     if args.distributed and args.sync_bn:
@@ -430,7 +605,7 @@ def main(args, gradient_accumulation_steps=1):
         for name, p in module.named_parameters(recurse=False):
             if not p.requires_grad:
                 continue
-            if isinstance(module, (HalutConv2d, HalutLinear)):
+            if isinstance(module, (HalutConv2d, HalutLinear, LUTMUConv2d, LUTMULinear)):
                 if name == "thresholds":
                     params["thresholds"].append(p)
                     continue
@@ -440,7 +615,7 @@ def main(args, gradient_accumulation_steps=1):
                 if name == "lut":
                     params["lut"].append(p)
                     continue
-            print("add to other", prefix, name)
+            # print("add to other", prefix, name)
             params["other"].append(p)
 
         for child_name, child_module in module.named_children():
@@ -612,6 +787,8 @@ def main(args, gradient_accumulation_steps=1):
     start_time = time.time()
     best_acc = 0.0
     testname = ""
+    early_exit_thresholds = args.early_exit_thresholds # exit training if accuracy didn't improve
+    early_exit_counter = 0
     # check if key in dict
     if "testname" in args and args.testname is not None:
         testname = args.testname
@@ -714,6 +891,11 @@ def main(args, gradient_accumulation_steps=1):
                     checkpoint,
                     os.path.join(args.output_dir, f"model_best-{best_acc:.2f}.pth"),
                 )
+                
+                early_exit_counter = 0
+            else:
+                early_exit_counter += 1
+                
             # utils_train.save_on_master(
             #     checkpoint, os.path.join(args.output_dir, f"model_{epoch}.pth")
             # )
@@ -742,7 +924,11 @@ def main(args, gradient_accumulation_steps=1):
             if optimizer_lr_local <= args.min_lr_to_break:
                 print("learning rate too small, stop training")
                 break
-
+            
+        if early_exit_counter >= early_exit_thresholds:
+            print(f"Accuracy didn't improve for {early_exit_thresholds} epochs, stop training")
+            break
+        
     if args.distributed:
         torch.distributed.barrier()
     total_time = time.time() - start_time
@@ -759,7 +945,7 @@ def get_args_parser(add_help=True):
 
     parser.add_argument(
         "--data-path",
-        default="/scratch/ml_datasets/ILSVRC2012",
+        default=".",
         type=str,
         help="dataset path",
     )
@@ -1004,11 +1190,52 @@ def get_args_parser(add_help=True):
     )
 
     parser.add_argument(
+        "--mnist",
+        action="store_true",
+        help="Uses mnist dataset",
+    )
+    
+    parser.add_argument(
+        "--imagenet",
+        action="store_true",
+        help="Uses IMAGENET dataset",
+    )
+    
+    parser.add_argument(
+        "--imagenet_small",
+        action="store_true",
+        help="Uses IMAGENET_SMALL dataset",
+    )
+    parser.add_argument(
+        "--imagenet_tiny",
+        action="store_true",
+        help="Uses IMAGENET_TINY dataset",
+    )
+    
+    parser.add_argument(
         "--simulate",
         action="store_true",
         help="Simulate the training process",
     )
 
+    parser.add_argument(
+        "--early-exit-thresholds",
+        default=150,
+        type=int,
+        help="Early exit training if accuracy didn't improve for these many epochs",
+    )
+    parser.add_argument(
+        "--lutmu",
+        action="store_true",
+        help="use special kn2col slice method for lutmu",
+    )
+    parser.add_argument(
+        "--bitwidth",
+        default=4,
+        help="the quantisation bitwidth (default 4 bits activation and 4 bits weights)",
+        type=int,
+    )
+    
     return parser
 
 

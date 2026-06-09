@@ -21,7 +21,7 @@ import torch.utils.data
 from torch import nn
 
 import utils_train as utils
-from train import evaluate, load_data, train_one_epoch
+from training.train import evaluate, load_data, train_one_epoch
 from models.resnet9 import ResNet9
 
 # pylint: disable=line-too-long

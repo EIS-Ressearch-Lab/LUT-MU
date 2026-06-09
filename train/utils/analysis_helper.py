@@ -249,6 +249,12 @@ def json_to_dataframe(
     df.columns = df.columns.str.replace(layer_name + ".", "")
     return df
 
+quant_fc = [
+    "features.2",
+    "features.6",
+    "features.10",
+    "features.14",
+]
 
 resnet18_layers = [
     "layer1.0.conv1",
@@ -258,19 +264,39 @@ resnet18_layers = [
     "layer2.0.conv1",
     "layer2.0.conv2",
     "layer2.0.downsample.0",
+    # "layer2.1.conv1",
+    # "layer2.1.conv2",
+    # "layer3.0.conv1",
+    # "layer3.0.conv2",
+    # "layer3.0.downsample.0",
+    # "layer3.1.conv1",
+    # "layer3.1.conv2",
+    # "layer4.0.conv1",
+    # "layer4.0.conv2",
+    # "layer4.0.downsample.0",
+    # "layer4.1.conv1",
+    # "layer4.1.conv2",
+    # "fc",
+]
+
+quant_resnet50 = [
+    "layer1.0.conv1",
+    "layer1.0.conv2",
+    "layer1.0.conv3",
+    "layer1.0.downsample.0",
+    "layer1.1.conv1",
+    "layer1.1.conv2",
+    "layer1.1.conv3",
+    "layer1.2.conv1",
+    "layer1.2.conv2",
+    "layer1.2.conv3",
+    "layer2.0.conv1",
+    "layer2.0.conv2",
+    "layer2.0.conv3",
+    "layer2.0.downsample.0",
     "layer2.1.conv1",
     "layer2.1.conv2",
-    "layer3.0.conv1",
-    "layer3.0.conv2",
-    "layer3.0.downsample.0",
-    "layer3.1.conv1",
-    "layer3.1.conv2",
-    "layer4.0.conv1",
-    "layer4.0.conv2",
-    "layer4.0.downsample.0",
-    "layer4.1.conv1",
-    "layer4.1.conv2",
-    "fc",
+    "layer2.1.conv3",
 ]
 
 resnet20_layers = [
@@ -381,12 +407,20 @@ def get_layers(name: available_models) -> list[str]:
         return layers_interesting
     elif name == "resnet18":
         return resnet18_layers
+    elif name == "quant_resnet18":
+        return resnet18_layers
     elif name == "resnet20":
         return resnet20_layers
     elif name == "resnet9":
         return resnet9_layers
+    elif name == "quant_resnet9":
+        return resnet9_layers
     elif name == "resnet8":
         return resnet8_layers
+    elif name == "quant_resnet50":
+        return quant_resnet50
+    elif name == "quant_fc":
+        return quant_fc
     else:
         return Exception("Model name not supported: ", name)  # type: ignore
 
