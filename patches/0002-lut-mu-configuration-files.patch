@@ -1,0 +1,71 @@
+From a7787d16d82c3b02bcdf2aa605ba25329be4bb4e Mon Sep 17 00:00:00 2001
+From: PeiGiZhu <peigizhu@outlook.com>
+Date: Tue, 9 Jun 2026 22:42:04 +0000
+Subject: [PATCH 2/2] lut-mu configuration files
+
+---
+ .../configs/quant_resnet18_num_C_8_K_16.json  |   9 +
+ train/configs/quant_resnet50_custom_C_K.json  |  15 ++
+ train/configs/quant_resnet9_num_C_8_K_16.json | 9 +++++++++
+ 3 files changed, 33 insertions(+)
+ create mode 100644 train/configs/quant_resnet18_num_C_8_K_16.json
+ create mode 100644 train/configs/quant_resnet50_custom_C_K.json
+ create mode 100644 train/configs/quant_resnet9_num_C_8_K_16.json
+ 
+diff --git a/train/configs/quant_resnet18_num_C_8_K_16.json b/train/configs/quant_resnet18_num_C_8_K_16.json
+new file mode 100644
+index 0000000..4f7c291
+--- /dev/null
++++ b/train/configs/quant_resnet18_num_C_8_K_16.json
+@@ -0,0 +1,9 @@
++{
++    "length_per_codebook": [8, 8, 
++                            8, 8, 
++                            8, 8, 8],
++                            
++    "prototype_per_codebook": [16, 16,  
++                               16, 16,  
++                               16, 16, 16]
++}
+\ No newline at end of file
+diff --git a/train/configs/quant_resnet50_custom_C_K.json b/train/configs/quant_resnet50_custom_C_K.json
+new file mode 100644
+index 0000000..3a479c7
+--- /dev/null
++++ b/train/configs/quant_resnet50_custom_C_K.json
+@@ -0,0 +1,15 @@
++{
++    "length_per_codebook": [8, 8, 8, 8, 
++                            16, 8, 8, 
++                            16, 8, 8,
++                            16, 16, 16, 16,
++                            32, 16, 16
++                        ],
++                            
++    "prototype_per_codebook": [16, 16, 16, 16, 
++                               16, 16, 16, 
++                               16, 16, 16,
++                               16, 16, 16, 16,
++                               16, 16, 16
++                            ]
++}
+\ No newline at end of file
+diff --git a/train/configs/quant_resnet9_num_C_8_K_16.json b/train/configs/quant_resnet9_num_C_8_K_16.json
+new file mode 100644
+index 0000000..4f7c291
+--- /dev/null
++++ b/train/configs/quant_resnet9_num_C_8_K_16.json
+@@ -0,0 +1,9 @@
++{
++    "length_per_codebook": [8, 8, 
++                            8, 8, 
++                            8, 8, 8],
++                            
++    "prototype_per_codebook": [16, 16,  
++                               16, 16,  
++                               16, 16, 16]
++}
+\ No newline at end of file
+-- 
+2.43.0
+
