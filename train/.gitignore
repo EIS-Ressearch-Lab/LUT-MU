@@ -11,10 +11,11 @@
 
 build/
 *.v
-.datasets
 .dvt/
-runs
 
-tools
+results
+runs
+datasets
+model_checkpoints
 
 *.log
