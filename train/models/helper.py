@@ -10,6 +10,7 @@ from models.resnet import END_STORE_A, END_STORE_B
 from timm.utils import accuracy
 from training import utils_train
 from halutmatmul.modules import HalutConv2d, HalutLinear
+from halutmatmul.modules import LUTMUConv2d, LUTMULinear
 import halutmatmul.halutmatmul as hm
 
 T_co = TypeVar("T_co", covariant=True)
@@ -42,13 +43,13 @@ def write_inputs_to_disk(
                 assert hasattr(module, "input_storage_a") or hasattr(
                     module, "input_storage_b"
                 )
-                if hasattr(module, "input_storage_a"):
+                if hasattr(module, "input_storage_a") and not (module.input_storage_a is None):
                     rows_to_store_during_current_iter = math.ceil(
                         total_rows_store / total_iterations
                     )
                     rows = module.input_storage_a.shape[0]  # type: ignore[index]
                     if (
-                        isinstance(module, HalutConv2d)
+                        isinstance(module, (HalutConv2d, LUTMUConv2d))
                         and module.loop_order == "kn2col"
                     ):
                         # batches to store now for kn2col instead of rows
@@ -115,7 +116,7 @@ def write_inputs_to_disk(
                             store_arrays[store_layer_name],
                         )
                     module.input_storage_a = None  # type: ignore[assignment]
-                if hasattr(module, "input_storage_b") and iteration == 0:
+                if hasattr(module, "input_storage_b") and iteration == 0 and not (module.input_storage_b is None):
                     np_array_b = (
                         module.input_storage_b.detach().cpu().numpy()  # type: ignore[operator]
                     )
@@ -137,7 +138,7 @@ def write_module_back(module: torch.nn.Module, store_path: str) -> None:
     def store(module: torch.nn.Module, prefix: str = "") -> None:
         store_layer_name = prefix[:-1]
         store_layer_name = store_layer_name.replace("module.", "")
-        if isinstance(module, (HalutConv2d, HalutLinear)) and len(module.lut.shape) > 1:
+        if isinstance(module, (HalutConv2d, HalutLinear, LUTMUConv2d, LUTMULinear)) and len(module.lut.shape) > 1:
             C = module.lut.size(-2)
             K = module.lut.size(-1)
             save_path = store_path + f"/{store_layer_name}_{C}_{K}.npy"
@@ -176,7 +177,7 @@ def get_and_print_layers_to_use_halut(
     all_layers = []
 
     def layers(module: torch.nn.Module, prefix: str = "") -> None:
-        if isinstance(module, (HalutLinear, HalutConv2d)):
+        if isinstance(module, (HalutLinear, HalutConv2d, LUTMULinear, LUTMUConv2d)):
             all_layers.append(prefix[:-1])
         for name, child in module._modules.items():
             if child is not None:
@@ -319,6 +320,7 @@ def evaluate_halut_imagenet(
     iterations = len(data_loader)
     # switch to evaluation mode
     # model.eval()
+    model.to(device)
     if is_store:
         model.train()
     else:
