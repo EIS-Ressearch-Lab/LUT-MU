@@ -56,7 +56,7 @@ class HalutModuleConfig:
     K = 1
     LOOP_ORDER = 2
     USE_PROTOTYPES = 3
-    MAX = 4
+    USE_LUTMU = 4
 
 
 def learn_halut_offline_report(
@@ -149,7 +149,7 @@ class HalutMatmul:
         self.offset: float = 0.0
         self.scale: float = 1.0
         # important otherwise wrong summation
-        assert self.upcast_every in (1, 2, 4, 8, 16, 32, 64, 128, 256)
+        assert self.upcast_every in (1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096)
         self.accumulate_how = "mean"  # sum
 
         self.stats_dict: Dict[str, Any] = dict([])
@@ -288,7 +288,7 @@ class HalutMatmul:
         _, C, K = self.luts.shape
         self.C = C
         self.K = K
-        assert self.upcast_every in (1, 2, 4, 8, 16, 32, 64, 128, 256)
+        assert self.upcast_every in (1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096)
         return self
 
     # redefinition for convenience public function
@@ -369,7 +369,8 @@ class HalutMatmul:
                 centroids_kmeans = kmeans.centroids
                 self.simple_k_mean_prototypes[c] = centroids_kmeans
         else:
-            nbit = 4
+            # nbit = 4
+            nbit = int(np.log2(self.K))
             pq = faiss.ProductQuantizer(subsampled.shape[1], self.C, nbit)
             pq.verbose = True
             # pylint: disable=no-value-for-parameter
@@ -425,7 +426,7 @@ class HalutMatmul:
     def _create_lut(self, B: np.ndarray) -> tuple[np.ndarray, float, float]:
         # called with B.T
         B = np.atleast_2d(B)
-        luts = np.zeros((B.shape[0], self.C, self.K))
+        luts = np.zeros((B.shape[0], self.C, self.K)) # B.T.shape[0] is out_channel
         for i, q in enumerate(B):
             luts[i] = maddness_lut(q, self.prototypes)
         if self.quantize_lut:

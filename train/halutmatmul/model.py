@@ -18,6 +18,7 @@ from models.helper import (
 import halutmatmul.halutmatmul as hm
 from halutmatmul.learn import learn_halut_multi_core_dict
 from halutmatmul.modules import ErrorTuple, HalutConv2d, HalutLinear
+from halutmatmul.modules import LUTMUConv2d, LUTMULinear
 
 T_co = TypeVar("T_co", covariant=True)
 
@@ -108,6 +109,7 @@ class HalutHelper:
         distributed: bool = False,
         device_id: int = 0,
         kmeans_options: dict[str, Any] = dict([]),
+        # use_lutmu: bool = False,
     ) -> None:
         self.model = model
         self.dataset = dataset
@@ -128,6 +130,7 @@ class HalutHelper:
         self.distributed = distributed
         self.device_id = device_id
         self.kmeans_options = kmeans_options
+        # self.use_lutmu = use_lutmu
 
     def activate_halut_module(
         self,
@@ -136,6 +139,7 @@ class HalutHelper:
         K: int = 16,
         loop_order: Literal["im2col", "kn2col"] = "im2col",
         use_prototypes: bool = False,
+        use_lutmu: bool = False,
     ) -> None:
         if name not in self.editable_keys:
             raise Exception(f"module {name} not in model")
@@ -144,15 +148,21 @@ class HalutHelper:
             print(f"overwrite halut layer {name}")
 
         module_ref = get_module_by_name(self.model, name)
-        if isinstance(module_ref, HalutConv2d):
+        if isinstance(module_ref, (HalutConv2d)):
             # Conv2d layer
             module_ref.loop_order = loop_order
             module_ref.use_prototypes = use_prototypes
-            self.halut_modules |= dict({name: [C, K, loop_order]})
-        elif isinstance(module_ref, HalutLinear):
+            self.halut_modules |= dict({name: [C, K, loop_order, use_prototypes, use_lutmu]})
+        elif isinstance(module_ref, (LUTMUConv2d)):
+            # Conv2d layer
+            module_ref.loop_order = loop_order
+            module_ref.use_prototypes = use_prototypes
+            module_ref.use_lutmu = use_lutmu
+            self.halut_modules |= dict({name: [C, K, loop_order, use_prototypes, use_lutmu]})
+        elif isinstance(module_ref, (HalutLinear, LUTMULinear)):
             # Linear layer
             module_ref.use_prototypes = use_prototypes
-            self.halut_modules |= dict({name: [C, K]})
+            self.halut_modules |= dict({name: [C, K, use_prototypes]})
         else:
             raise Exception(
                 f"module {name} not a HALUT conv or linear layer {type(module_ref)}"
@@ -261,10 +271,12 @@ class HalutHelper:
                 args[hm.HalutModuleConfig.C],
                 args[hm.HalutModuleConfig.K],
             ]
-            if len(args) > 2:
+            if len(args) > 3:
                 # Conv2d layer
                 dict_to_learn[k].append(args[hm.HalutModuleConfig.LOOP_ORDER])
-
+                dict_to_learn[k].append(args[hm.HalutModuleConfig.USE_PROTOTYPES])
+                dict_to_learn[k].append(args[hm.HalutModuleConfig.USE_LUTMU])
+                
             paths = check_file_exists_and_return_path(self.data_path, k, "input")
             print(f"paths {paths}")
             if len(paths) != 2:
@@ -275,8 +287,9 @@ class HalutHelper:
         # pylint: disable=consider-iterating-dictionary, consider-using-dict-items
         for name in dict_to_learn.keys():
             module = get_module_by_name(self.model, name)
-            if isinstance(module, HalutConv2d):
+            if isinstance(module, (HalutConv2d, LUTMUConv2d)):
                 assert dict_to_learn[name][2] == module.loop_order
+                assert dict_to_learn[name][4] == module.use_lutmu
                 dict_to_learn[name].append(module.kernel_size)
                 dict_to_learn[name].append(module.stride)
                 dict_to_learn[name].append(module.padding)

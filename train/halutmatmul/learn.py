@@ -10,7 +10,8 @@ import torch
 
 from models.resnet import END_STORE_A, END_STORE_B
 import halutmatmul.halutmatmul as hm
-from halutmatmul.modules import HalutConv2d
+from halutmatmul.halutmatmul import HalutMatmul
+from halutmatmul.modules import HalutConv2d, LUTMUConv2d
 
 # https://docs.python.org/3/library/asyncio-queue.html#asyncio-queues
 
@@ -43,6 +44,7 @@ def learn_halut(
     min_points_per_centroid=100,
     max_points_per_centroid=1000,
     codebook: int = -1,
+    use_lutmu: bool = False,
 ) -> None:
     files = glob.glob(data_path + f"/{l}" + END_STORE_A)
     files = [x.split("/")[-1] for x in files]
@@ -94,41 +96,91 @@ def learn_halut(
         elif loop_order == "kn2col":
             halut_numpy_list = []
             lut_list = []
+            simple_lut_list = []
             dims_list = []
             thresholds_list = []
-            conv_layer = HalutConv2d(
-                a_numpy.shape[-1],
-                b_numpy.shape[-1],
-                kernel_size,
-                stride,
-                padding,
-            )
-            a_torch = torch.from_numpy(a_numpy)
-            for k_x in range(kernel_size[0]):
-                for k_y in range(kernel_size[1]):
-                    input_slice = conv_layer.kn2col_input_slice(
-                        a_torch, a_torch.shape[1], a_torch.shape[2], k_x, k_y
-                    )
-                    input_slice = input_slice.reshape(-1, input_slice.shape[-1])
-                    halut_numpy = hm.learn_halut_offline(
-                        input_slice.detach().cpu().numpy(),
-                        b_numpy[k_x * kernel_size[0] + k_y],
-                        C,
-                        K=K,
-                    )
-                    halut_numpy_list.append(halut_numpy)
-                    lut_list.append(halut_numpy[hm.HalutOfflineStorage.LUT])
-                    dims_list.append(halut_numpy[hm.HalutOfflineStorage.DIMS])
-                    thresholds_list.append(
-                        halut_numpy[hm.HalutOfflineStorage.THRESHOLDS]
-                    )
-            lut = np.array(lut_list)
-            dims = np.array(dims_list)
-            thresholds = np.array(thresholds_list)
-            halut_numpy = halut_numpy_list[0]
-            halut_numpy[hm.HalutOfflineStorage.LUT] = lut
-            halut_numpy[hm.HalutOfflineStorage.DIMS] = dims
-            halut_numpy[hm.HalutOfflineStorage.THRESHOLDS] = thresholds
+            
+            if use_lutmu:
+                conv_layer = LUTMUConv2d(
+                    a_numpy.shape[-1],
+                    b_numpy.shape[-1],
+                    kernel_size,
+                    stride,
+                    padding,
+                    use_lutmu=use_lutmu
+                )
+                a_torch = torch.from_numpy(a_numpy)
+                
+                input_slice = conv_layer.kn2col_input_slice_lutmu(a_torch)
+                input_slice = input_slice.reshape(-1, input_slice.shape[-1])
+                mn = HalutMatmul(
+                    C,
+                    K=K
+                )
+                # use all pixel (H*W of the input matrix) and cluster them at once
+                
+                mn.learn_simple_k_means_prototypes(
+                    input_slice.detach().cpu().numpy(),
+                )
+                mn.learn_A(input_slice.detach().cpu().numpy())
+                
+                for k_x in range(kernel_size[0]):
+                    for k_y in range(kernel_size[1]):
+                        mn.calculate_simple_lut(b_numpy[k_x * kernel_size[0] + k_y])
+                        mn._set_B(b_numpy[k_x * kernel_size[0] + k_y])
+                        
+                        halut_numpy = mn.to_numpy()
+                        lut_list.append(halut_numpy[hm.HalutOfflineStorage.LUT])
+                        simple_lut_list.append(halut_numpy[hm.HalutOfflineStorage.SIMPLE_LUT])
+                
+                lut = np.array(lut_list)
+                simple_lut = np.array(simple_lut_list)
+                halut_numpy[hm.HalutOfflineStorage.LUT] = lut
+                halut_numpy[hm.HalutOfflineStorage.SIMPLE_LUT] = simple_lut
+                # all pixel use same DIMs and thresholds, they are load only once in mn.to_numpy()
+                
+            else:
+            # original version of kn2col matmul
+                conv_layer = HalutConv2d(
+                    a_numpy.shape[-1],
+                    b_numpy.shape[-1],
+                    kernel_size,
+                    stride,
+                    padding,
+                )
+                a_torch = torch.from_numpy(a_numpy)
+                
+                for k_x in range(kernel_size[0]):
+                    for k_y in range(kernel_size[1]):
+                        input_slice = conv_layer.kn2col_input_slice(
+                            a_torch, a_torch.shape[1], a_torch.shape[2], k_x, k_y
+                        )
+                        input_slice = input_slice.reshape(-1, input_slice.shape[-1])
+                        halut_numpy = hm.learn_halut_offline(
+                            input_slice.detach().cpu().numpy(),
+                            b_numpy[k_x * kernel_size[0] + k_y],
+                            C,
+                            K=K,
+                        )
+                        halut_numpy_list.append(halut_numpy)
+                        lut_list.append(halut_numpy[hm.HalutOfflineStorage.LUT])
+                        simple_lut_list.append(halut_numpy[hm.HalutOfflineStorage.SIMPLE_LUT])
+                        dims_list.append(halut_numpy[hm.HalutOfflineStorage.DIMS])
+                        thresholds_list.append(
+                            halut_numpy[hm.HalutOfflineStorage.THRESHOLDS]
+                        )
+                        
+                lut = np.array(lut_list)
+                simple_lut = np.array(simple_lut_list)
+                dims = np.array(dims_list)
+                thresholds = np.array(thresholds_list)
+                halut_numpy = halut_numpy_list[0]
+                
+                # lut shape: kernel_size, out_channel, n_codebook, n_prototypes
+                halut_numpy[hm.HalutOfflineStorage.LUT] = lut
+                halut_numpy[hm.HalutOfflineStorage.SIMPLE_LUT] = simple_lut
+                halut_numpy[hm.HalutOfflineStorage.DIMS] = dims
+                halut_numpy[hm.HalutOfflineStorage.THRESHOLDS] = thresholds
 
     if halut_numpy is None:
         raise Exception("halut_numpy is None")
@@ -166,6 +218,8 @@ def learn_halut_multi_core_dict(
         print("learning", k, v)
         conv2d_options = {
             "loop_order": "im2col",
+            "use_prototypes": False,
+            "use_lutmu": False,
             "kernel_size": (3, 3),
             "stride": (1, 1),
             "padding": (1, 1),
@@ -200,6 +254,7 @@ def learn_halut_multi_core_dict(
             min_points_per_centroid=kmeans_options_here["min_points_per_centroid"],
             max_points_per_centroid=kmeans_options_here["max_points_per_centroid"],
             codebook=codebook,
+            use_lutmu=conv2d_options['use_lutmu']
         )
 
     print("==== FINISHED LEARNING (exited all tasks) =======")

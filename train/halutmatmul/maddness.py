@@ -377,7 +377,7 @@ def learn_binary_tree_splits(
     check_x_dims: int = 8,  # can be used to check more or less dims with max losses
     learn_quantize_params: bool = False,
 ) -> Tuple[list, int, Union[list, np.ndarray]]:
-    assert K in (4, 8, 16, 32, 64, 128)
+    assert K in (4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096)
     nsplits = int(np.log2(K))
 
     X = X.copy().astype(np.float32)
