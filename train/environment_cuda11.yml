@@ -1,0 +1,61 @@
+name: halutmatmul
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.9
+  # IDE deps
+  - black
+  - pylint=2.17
+  - pytest
+  - pre-commit
+  - pytest-xdist
+  # algo dependencies
+  - numpy=1.21.2
+  - numba
+  - joblib
+  - scipy
+  - scikit-learn=1.1
+  - torchvision
+  # PyTorch and CUDA for NVIDIA H200 (use CUDA 12.1-compatible build)
+  - pytorch=2.4
+  - torchinfo
+  # kws
+  - torchaudio
+  - pysoundfile
+  # gpu stuff
+  - pytorch-cuda=11.7
+  - pip
+  # analysis
+  - pandas
+  - seaborn
+  - matplotlib
+  # for CI
+  - mypy>=1.4.1
+  # kmeans
+  - faiss-cpu=1.7.3 # https://github.com/facebookresearch/faiss/issues/2890
+  # ci
+  - pytest-split
+  - pip:
+      - tensorboard
+      - cupy_cuda11x
+      - pytorch-nemo
+      - timm==0.5.4
+      - ray
+      - cocotb # needed for mypy
+      - brevitas==0.12.1
+      # repair "undefined symbol: iJIT_NotifyEvent"
+      - mkl==2024.0.0
+
+  # Notes:
+  # - If conda cannot find `intel-oneapi-vtune` on the `intel` channel for your
+  #   platform, try installing Intel VTune / oneAPI using Intel's installer or
+  #   the distribution packages for your OS. The missing symbol `iJIT_NotifyEvent`
+  #   comes from Intel's JIT/profiling library (libiJIT) which VTune provides.
+  # - As a fallback workaround you can compile a small shim that provides stub
+  #   implementations of the iJIT symbols and preload it via LD_PRELOAD or add
+  #   an activation script to the conda env that sets LD_PRELOAD. Example shim
+  #   (C) and quick test were used during debugging; this is safe if you don't
+  #   need VTune profiling features.
