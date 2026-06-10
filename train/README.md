@@ -91,7 +91,7 @@ train
                 ├─ ...
                 │ # The testname given in retrain_example.sh
                 └─testname
-                    ├─ XXX_train.json
-                    └─ XXX.json
+                    ├─ retrained_X_trained.json
+                    └─ retrained_X.json
    
 ```
