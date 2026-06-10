@@ -4,7 +4,7 @@ import os
 
 if __name__ == "__main__":
 
-    path = "./model_checkpoints/qatresnet50_4Bit_imagenet_lr0.1_sgd_batch_256_epoch100/halut/lutmu_kn2col_custom_C_K_lr_0.0005/checkpoints"
+    path = "./model_checkpoints/output/halut/testname/checkpoints"
     files = os.listdir(path)
     
     for file in files:
