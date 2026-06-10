@@ -1,6 +1,6 @@
 # LUT-MU based NN acceleration on FPGA
 
-This repository shows **training** and **deployment** example of LUT-MU based NN models proposed in paper *Mitigating scalability challenges in LUT-based neural networks via pruning optimisations*.
+This repository shows **training** example of LUT-MU based NN models proposed in paper *Mitigating scalability challenges in LUT-based neural networks via pruning optimisations*.
 
 ## Abstract
 Modern deep neural networks heavily rely on a large number of multiply-accumulate operations, which constitute the predominant computational cost. To address this, Look-Up Table (LUT)-based matrix multiplications have emerged as a promising alternative for reducing the computational cost and time of the multiply-accumulate operations in a neural network. However, the LUT-based neural network still faces the scalability challenge due to the inherent limitations of LUT-based matrix multiplication. To mitigate these scalability limitations, this paper proposes a scalable and energy-efficient LUT-based approximate matrix multiplication unit (LUT-MU) constituting the basic component of the neural networks by integrating a pruning strategy on the MADDNESS algorithm, a LUT-based matrix multiplication methodology. With increasing problem size and precision demands in matrix multiplication, our proposed LUT-MU architecture effectively constrains resource expansion. The case study shows that deploying our LUT-MU in neural network architectures, including fully connected layers (MNIST) and ResNets (CIFAR-10, ImageNet)—on XCZU7EV and XCZU19EG FPGAs, produces up to $1.6 \times$ throughput improvement and $4.2 \times$ energy efficiency gains over mainstream CUDA-based network implementations, and $1.8\times$ energy efficiency compared to leading quantised neural network implementations, with moderate impact on accuracy. Compared to original MADDNESS-based neural networks, our LUT-MU shows $1.3$ to $2.6\times$ resource savings based on various resolution configuration settings of MADDNESS.
@@ -28,8 +28,6 @@ The implementation of LUT-MU is based on [Halutmatmul](https://github.com/joennl
 ## Quick start
 
 - Follow the [manual](./train) to train LUT-MU based NN.
-
-- Follow the [manual](./deploy) to generate and deploy bitstream on FPGA. (🚧 **TODO** 🚧)
 
 ## Reference
 - [Stella Nera: Achieving 161 TOp/s/W with Multiplier-free DNN Acceleration based on Approximate Matrix Multiplication](https://arxiv.org/pdf/2311.10207) (i.e., [Halutmatmul](https://github.com/joennlae/halutmatmul))
