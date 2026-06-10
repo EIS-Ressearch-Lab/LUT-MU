@@ -86,9 +86,11 @@
 	</defs>
 	<g>
 		<title>Page-1</title>
-		<g id="shape1857-1">
-			<title>Sheet.1857</title>
-			<rect x="0" y="-0.124364" width="494.646" height="409.606" class="st1"/>
+		<g id="shape1858-1">
+			<title>Rounded Rectangle.1858</title>
+			<path d="M2.55 409.48 L492.09 409.48 A2.55115 2.55115 -180 0 0 494.65 406.93 L494.65 2.43 A2.55115 2.55115 -180 0 0 492.09
+						 -0.12 L2.55 -0.12 A2.55115 2.55115 -180 0 0 0 2.43 L0 406.93 A2.55115 2.55115 -180 0 0 2.55 409.48 Z"
+					class="st1"/>
 		</g>
 		<g id="group2671-3" transform="translate(179.357,-88.246)">
 			<title>Sheet.2671</title>
