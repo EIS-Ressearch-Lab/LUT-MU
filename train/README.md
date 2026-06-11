@@ -39,7 +39,7 @@ Please see `QuantResNet9` in [qatresnet9.py](models/qatresnet9.py) or `QuantResN
 3. The model checkpoints are saved in `model_checkpoints/output/halut/testname/checkpoints`. The `retraining.py` saves fine-tuned model weights with the best accuracy as `model_best-XX.YY.pth`. For example, replacing 7 layers to LUT-MU will generate 7 `model_best-XX.YY.pth` files. Use [check_pth.py](check_pth.py) to identify the desired model checkpoints.
 
 ## Directory Structure
-
+Running `train.py` and `retraining.py` generates **model checkpoints** and **evalutation resutls**. The final directory structure will be like: 
 ```text
 train
   │ # model defination
