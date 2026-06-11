@@ -1863,7 +1863,7 @@ class LUTMUConv2d(QuantWBIOL, Conv2d):
                             )
                             input_slice = input_slice.reshape(-1, input_slice.shape[-1])
                             # only different from the orignial version is that:
-                            # we dont need thresholds and dims for every pixel vector of the weight matrix
+                            # we dont need window-specific thresholds and dims, but use unified thresholds and dims for all windows 
                             matmul_result = halut_matmul_forward(
                                 input_slice,
                                 self.thresholds,
