@@ -32,7 +32,10 @@ Please see `QuantResNet9` in [qatresnet9.py](models/qatresnet9.py) or `QuantResN
 ### 4. Command Line Interface Example
 
 1. Run `train.py` as [train_example.sh](train_example.sh) to generate quantised weights for the original model using standard quantised matrix multiplication.
-2. Run `retraining.py` as [retrain_example.sh](retrain_example.sh) to layer-wisely replace quantised matrix multiplication into LUT-MU and fine-tune its LUT.
+2. Run `retraining.py` as [retrain_example.sh](retrain_example.sh) to layer-wisely replace quantised matrix multiplication into Halutmatmul or LUT-MU and fine-tune its LUT. 
+   - run `retraining.py` without `--kn2col`, `--lutmu` and `--kc_config` for im2col Halutmatmul
+   - run `retraining.py` with `--kn2col` for kn2col Halutmatmul
+   - run `retraining.py` with `--kn2col`, `--lutmu` and `--kc_config` for LUT-MU
 3. The model checkpoints are saved in `model_checkpoints/output/halut/testname/checkpoints`. The `retraining.py` saves fine-tuned model weights with the best accuracy as `model_best-XX.YY.pth`. For example, replacing 7 layers to LUT-MU will generate 7 `model_best-XX.YY.pth` files. Use [check_pth.py](check_pth.py) to identify the desired model checkpoints.
 
 ## Directory Structure
