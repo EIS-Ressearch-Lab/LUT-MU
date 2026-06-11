@@ -1,4 +1,4 @@
-# LUT-MU based NN acceleration on FPGA
+# LUT-MU based NN
 
 This repository shows **training** example of LUT-MU based NN models proposed in paper *Mitigating scalability challenges in LUT-based neural networks via pruning optimisations*.
 
