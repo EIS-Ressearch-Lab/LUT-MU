@@ -29,8 +29,8 @@ The implementation of LUT-MU is based on [Halutmatmul](https://github.com/joennl
 
 - Follow the [manual](./train) to train LUT-MU based NN.
 
-## Reference
+## Acknowledgement
 - [Stella Nera: Achieving 161 TOp/s/W with Multiplier-free DNN Acceleration based on Approximate Matrix Multiplication](https://arxiv.org/pdf/2311.10207) (i.e., [Halutmatmul](https://github.com/joennlae/halutmatmul))
 - [Multiplying Matrices Without Multiplying](https://arxiv.org/pdf/2106.10860) (i.e., [MADDNESS](https://github.com/dblalock/bolt))
-- Xilinx - [brevitas](https://github.com/Xilinx/brevitas)
-- Xilinx - [FINN](https://github.com/Xilinx/finn)
+- AMD Xilinx - [brevitas](https://github.com/Xilinx/brevitas)
+- AMD Xilinx - [FINN](https://github.com/Xilinx/finn)
